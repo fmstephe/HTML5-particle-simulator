@@ -1,0 +1,637 @@
+<html>
+<head>
+	<script type="text/javascript">
+	document.onkeydown = captureKeyDown;
+	document.onkeyup = captureKeyUp;
+	
+	var maxFrameTime = 0;
+	var firstRun = true;
+	// Canvas data
+	var canvas;
+	var context;
+	// Array for caching gravities of regions
+	var gravityCache;
+	var gravityCacheXIndex = 0;
+	var gravityCacheYIndex = 1;
+	var timeStampIndex = 2;
+	var cacheHitCount = 0;
+	var gravityCacheGranularity = 1;
+	// Gravity wells
+	var gravityWells = new Array(0);
+	var gravityWellXIndex = 0;
+	var gravityWellYIndex = 1;
+	var gravityWellLastChangeIndex = 2;
+	var gravityWellStrengthIndex = 3;
+	var gravityWellPersistence = 10000; // Time in milliseconds that a gravity well lasts for
+	var maxGravityWellStrength = 20;
+	// Helpful gobals
+	var canvasWidth = -1;
+	var canvasHeight = -1;
+	// Index variables for accessing particle data
+	var xIndex = 0;
+	var yIndex = 1;
+	var dXIndex = 2;
+	var dYIndex = 3;
+	var moveCountIndex = 4;
+	var nextDeadIndex = 5;
+	// Particle behaviour data
+	var maxMoves = 10;
+	var maxDiff = 3;
+	// Gravity data
+	var stableDistance = 24;
+	var aMultiplier = 1;
+	var bMultiplier = 2;
+	var gravityMultiplier = 23;
+	// Player Control globals
+	var wKey = false;
+	var aKey = false;
+	var sKey = false;
+	var dKey = false;
+	var shiftKey = false;
+	var maxSpeed = 38;
+	var currentSpeed = 0;
+	var acceleration = 5;
+	var deceleration = 0.5;
+	var breaking = 1.5;
+	var rotationSpeed = Math.PI/13;  // rotation in radians
+	//Player One Globals
+	var p1GravityX = -1; // This is the player x location that affects particles - this one can wiggle back and forth
+	var p1GravityY = -1; // This is the player y location that affects particles - this one can wiggle back and forth
+	var p1TravellingX = -1; // This is used to record the central x path of the player - this one moves in a direct manner
+	var p1TravellingY = -1; // This is used to record the central y path of the player - this one moves in a direct manner
+	var forwardIntention = Math.PI; // in radians
+	var forwardPushRotation = Math.PI;
+	var forwardPushRotationModifier = 0;
+	var forwardPushX = 0;
+	var forwardPushY = 0;
+	// Player One Particles
+	var p1Particles = new Array(1000);
+	var p1DeadParticle = -1;
+	var p1DeadParticleCount = 0;
+	var p1ParticleRespawnTime = 0.1;
+	var p1TimeSinceLastRespawn = new Date().getTime();
+	// Performance data variables
+	var updateSpeed = 35; // Rate of calls to animate() in millis
+	var clockTickTime = 35; // Amount of time(millis) that is considered a single clock tick for calculating movement
+	var timeSinceLastRefresh;
+	var lastTimeLapse;
+	var accumulatedTime = 0; // Used to trigger a particle kill round
+	var clockTickFraction;
+	
+	function init() {
+		setUpCanvasVars();
+		setUpArrays();
+		timeSinceLastRefresh = new Date().getTime();
+		setInterval(animate,updateSpeed);
+	}
+	function setUpCanvasVars() {
+		canvas = document.getElementById("canvas");
+		context = canvas.getContext("2d");
+		canvasWidth = canvas.width
+		canvasHeight = canvas.height;
+		p1TravellingX = Math.floor(canvasWidth/3);
+		p1TravellingY = Math.floor(canvasHeight/2);
+	}
+	function setUpArrays() {
+		var i = 0;
+		for (i = 0; i < p1Particles.length; i++) {
+			var coords = new Array(6);
+			p1Particles[i] = coords;
+			coords[xIndex] = p1GravityX+1;
+			coords[yIndex] = p1GravityY+1;
+			coords[nextDeadIndex] = -1;
+			resetDifferential(coords);
+		}
+		for (i = 0; i < gravityWells.length; i++) {
+			var gravityWell = new Array(5);
+			gravityWell[gravityWellLastChangeIndex] = 0;
+			gravityWells[i] = gravityWell;
+		}
+		gravityCache = new Array((canvasWidth/gravityCacheGranularity)*(canvasHeight/gravityCacheGranularity));
+		for (i = 0; i < gravityCache.length; i++) {
+			gravityCache[i] = [0,0,0];
+		}
+	}
+	function animate() {
+		var now = new Date().getTime();
+		lastTimeLapse = now - timeSinceLastRefresh;
+		timeSinceLastRefresh = now;
+		if (firstRun) {
+			lastTimeLapse = clockTickTime;
+		}
+		calcClockTickFraction();
+		cacheHitCount = 0;
+		configure();
+		manageGravityWells();
+		movePlayerOne();
+		respawnParticles();
+		moveParticles();
+		killParticles();
+		draw();
+		firstRun = false;
+	}
+	function configure() {
+		stableDistance = 24-(14*(currentSpeed/maxSpeed));
+		gravityMultiplier = 600;
+	}
+	function manageGravityWells() {
+		var now = new Date().getTime();
+		for (i = 0; i < gravityWells.length; i++) {
+			var lastChange = gravityWells[i][gravityWellLastChangeIndex];
+			if (now - lastChange > gravityWellPersistence) {
+				gravityWells[i][gravityWellXIndex] = randomInt(canvasWidth);
+				gravityWells[i][gravityWellYIndex] = randomInt(canvasHeight);
+				gravityWells[i][gravityWellLastChangeIndex] = now;
+				gravityWells[i][gravityWellStrengthIndex] = randomInt(maxGravityWellStrength);
+			}
+		}
+	}
+	function movePlayerOne() {
+		rotatePlayerOne();
+		fireThrustersPlayerOne();
+		locateGravityPlayerOne();
+	}
+	function rotatePlayerOne() {
+		if (aKey) {
+			forwardIntention += clockTickFraction*rotationSpeed;
+		}
+		if (dKey) {
+			forwardIntention -= clockTickFraction*rotationSpeed;
+		}
+		forwardIntention = normaliseRotation(forwardIntention);
+	}
+	function normaliseRotation(rotation) {
+		if (rotation >= (Math.PI*2)) {
+			return (rotation - Math.PI*2);
+		}
+		if (rotation < 0) {
+			return (rotation + (Math.PI*2));
+		}
+		return rotation;
+	}
+	function fireThrustersPlayerOne() {
+		if (!sKey && !wKey) { // Drifting
+			currentSpeed -= deceleration;
+			currentSpeed = currentSpeed < 0 ? 0 : currentSpeed;
+		}
+		else if (sKey) { // Breaking
+			currentSpeed -= breaking;
+			currentSpeed = currentSpeed < 0 ? 0 : currentSpeed;
+		}
+		else { // Accelerating
+			var xMovement = clockTickFraction*acceleration*Math.sin(forwardIntention);
+			var yMovement = clockTickFraction*acceleration*Math.cos(forwardIntention);
+			forwardPushX += xMovement;
+			forwardPushY += yMovement;
+			currentSpeed = wKey ? currentSpeed += acceleration : currentSpeed;
+			currentSpeed = sKey ? currentSpeed -= breaking : currentSpeed;
+			currentSpeed = currentSpeed > maxSpeed ? maxSpeed : currentSpeed;
+			currentSpeed = currentSpeed < 0 ? 0 : currentSpeed;
+		}
+		normaliseForwardPush();
+		p1TravellingX += clockTickFraction*forwardPushX;
+		p1TravellingY += clockTickFraction*forwardPushY;
+		checkP1Bounds();
+	}
+	function normaliseForwardPush() {
+		var distance = Math.sqrt(Math.pow(forwardPushX,2)+Math.pow(forwardPushY,2));
+		if (forwardPushY == 0) {
+			if (forwardPushX == 0) {
+				forwardPushRotation = Math.PI;
+			}
+			else if (forwardPushX > 0) { // Pointing off to the right
+				forwardPushRotation = Math.PI/2;
+			}
+			else { // Pointing off to the left
+				forwardPushRotation = Math.PI*1.5;
+			}
+		}
+		else if (forwardPushX < 0) {
+			forwardPushRotation = Math.asin(forwardPushY/distance)-(Math.PI/2);
+		}
+		else {
+			forwardPushRotation = -Math.asin(forwardPushY/distance)+(Math.PI/2);
+		}
+		forwardPushRotation = normaliseRotation(forwardPushRotation);
+		if (distance > currentSpeed) {
+			forwardPushX = currentSpeed*Math.sin(forwardPushRotation);
+			forwardPushY = currentSpeed*Math.cos(forwardPushRotation);
+		}
+		else {
+			forwardPushX = distance*Math.sin(forwardPushRotation);
+			forwardPushY = distance*Math.cos(forwardPushRotation);
+		}
+	}
+	function checkP1Bounds() {
+		if (p1TravellingX < 0) {
+			p1TravellingX = p1GravityX*-1;
+			reorientForVerticalWall();
+		}
+		if (p1TravellingX > canvasWidth-1) {
+			p1TravellingX = (canvasWidth-1) + ((canvasWidth-1) - p1TravellingX);
+			reorientForVerticalWall();
+		}
+		if (p1TravellingY < 0) {
+			p1TravellingY = p1TravellingY*-1;
+			reorientForHorizontalWall();
+		}
+		if (p1TravellingY > canvasHeight-1) {
+			p1TravellingY = (canvasHeight-1) + ((canvasHeight-1) - p1TravellingY);
+			reorientForHorizontalWall();
+		}
+	}
+	function reorientForVerticalWall() {
+		if (forwardIntention >= 0 && forwardIntention <= Math.PI/2) {
+			forwardIntention = -forwardIntention;
+		}
+		else if (forwardIntention >= Math.PI/2 && forwardIntention <= Math.PI) {
+			forwardIntention = (Math.PI/2)-(forwardIntention-(Math.PI/2)) + Math.PI;
+		}
+		else if (forwardIntention >= Math.PI && forwardIntention <= Math.PI*1.5) {
+			forwardIntention = (Math.PI)-(forwardIntention-(Math.PI));
+		}
+		else if (forwardIntention >= Math.PI*1.5 && forwardIntention <= Math.PI*2) {
+			forwardIntention = (Math.PI/2)-(forwardIntention-(Math.PI*1.5));
+		}
+		normaliseRotation();
+		forwardPushX = currentSpeed*Math.sin(forwardIntention);
+		forwardPushY = currentSpeed*Math.cos(forwardIntention);
+	}
+	function reorientForHorizontalWall() {
+		if (forwardIntention >= 0 && forwardIntention <= Math.PI/2) {
+			forwardIntention = (Math.PI/2)-forwardIntention+(Math.PI/2);
+		}
+		else if (forwardIntention >= Math.PI/2 && forwardIntention <= Math.PI) {
+			forwardIntention = ((Math.PI)-forwardIntention);
+		}
+		else if (forwardIntention >= Math.PI && forwardIntention <= Math.PI*1.5) {
+			forwardIntention = (Math.PI*1.5)+((Math.PI*1.5)-forwardIntention);
+		}
+		else if (forwardIntention >= Math.PI*1.5 && forwardIntention <= Math.PI*2) {
+			forwardIntention = (Math.PI*1.5)-(forwardIntention-(Math.PI*1.5));
+		}
+		normaliseRotation();
+		forwardPushX = currentSpeed*Math.sin(forwardIntention);
+		forwardPushY = currentSpeed*Math.cos(forwardIntention);
+	}
+	/*
+	* Phew! This shit is convoluted.  Previously we have set the travelling x and y coordinates.
+	* Now we are using these to generate the gravity x and y coordinates.  The gravity coordinates
+	* can be thought of as the actual location of player one.  The travel coordinates track a smooth
+	* travelling path for player one.  This allows us to add silly movement effects without making
+	* the players travelling path complicated.  Below is the wiggle.  We call it the fish wiggle, but
+	* really it looks like a sperm.
+	*/
+	function locateGravityPlayerOne() {
+		var wriggleWidth = 8; // The bigger the bigger the wriggle
+		var wriggleSpeed = Math.PI/3.5; // The bigger the faster the wriggle
+		if (!aKey && !dKey && (currentSpeed > 0.9*maxSpeed)) { // Do the fish wriggle
+			var rightAngleRotation = normaliseRotation(forwardPushRotation+(Math.PI/2));
+			forwardPushRotationModifier += clockTickFraction*wriggleSpeed;
+			forwardPushRotationModifier = normaliseRotation(forwardPushRotationModifier);
+			wriggleMagnitude = Math.sin(forwardPushRotationModifier);
+			var xWriggle = Math.sin(rightAngleRotation)*wriggleMagnitude*wriggleWidth*(currentSpeed/maxSpeed);
+			var yWriggle = Math.cos(rightAngleRotation)*wriggleMagnitude*wriggleWidth*(currentSpeed/maxSpeed);
+			p1GravityX = p1TravellingX + xWriggle;
+			p1GravityY = p1TravellingY + yWriggle;
+		}
+		else {
+			p1GravityX = p1TravellingX;
+			p1GravityY = p1TravellingY;
+		}
+	}
+	function resetDifferential(coords) {
+		coords[dXIndex] = randomFloat(maxDiff*2)-maxDiff;
+		coords[dYIndex] = randomFloat(maxDiff*2)-maxDiff;
+		coords[moveCountIndex] = randomInt(maxMoves);
+	}
+	function respawnParticles() {
+		var now = new Date().getTime();
+		var elapsedTime = now - p1TimeSinceLastRespawn;
+		var spawns = elapsedTime / p1ParticleRespawnTime;
+		var extra = elapsedTime % p1ParticleRespawnTime;
+		for (var i = 0; i < spawns && p1DeadParticle != -1; i++) {
+			var coords = p1Particles[p1DeadParticle];
+			p1DeadParticle = coords[nextDeadIndex];
+			coords[nextDeadIndex] = -1; // now it will be redrawn
+			coords[xIndex] = p1TravellingX;
+			coords[yIndex] = p1TravellingY;
+			if (p1DeadParticle == -2) {
+				p1DeadParticle = -1;
+			}
+			p1DeadParticleCount--;
+		}
+		p1TimeSinceLastRespawn = now - extra;
+	}
+	function moveParticles() {
+		var i = 0;
+		for (i = 0; i < p1Particles.length; i++) {
+			if (p1Particles[i][nextDeadIndex] == -1) {
+				applyGravity(p1Particles[i],p1GravityX,p1GravityY);
+				applyAntigravity(p1Particles[i],p1GravityX,p1GravityY);
+				jiggle(p1Particles[i]);
+				boundsCheck(p1Particles[i]);
+			}
+		}
+	}
+	function jiggle(coords) {
+		var x = coords[xIndex];
+		var dX = coords[dXIndex];
+		x = dX + x;
+		var y = coords[yIndex];
+		var dY = coords[dYIndex];
+		y = dY + y;
+		coords[xIndex] = x;
+		coords[yIndex] = y;
+		testMoveCounter(coords);
+	}
+	function boundsCheck(coords) {
+		var x = coords[xIndex];
+		var y = coords[yIndex];
+		if (x < 0) {
+			x = x*-1;
+		}
+		if (x > canvasWidth-1) {
+			x = (canvasWidth-1) + ((canvasWidth-1) - x);
+		}
+		if (y < 0) {
+			y = y*-1;
+		}
+		if (y > canvasHeight-1) {
+			y = (canvasHeight-1) + ((canvasHeight-1) - y);
+		}
+		coords[xIndex] = x;
+		coords[yIndex] = y;
+	}
+	function testMoveCounter(coords) {
+		if(coords[moveCountIndex] == 0) {
+			resetDifferential(coords);
+		}
+		else {
+			coords[moveCountIndex] = coords[moveCountIndex]-1;
+		}
+	}
+	function applyGravity(coords,x,y) {
+		var particleX = Math.round(coords[xIndex]);
+		var particleY = Math.round(coords[yIndex]);
+		// TODO the granularity stuff doesn't work - have a think about it
+		var cacheIndex = ((particleY)*canvasWidth)+(particleX);
+		var cachedGravity = gravityCache[cacheIndex];
+		if (cachedGravity[timeStampIndex] == timeSinceLastRefresh) {
+			cacheHitCount++;
+			coords[xIndex] = cachedGravity[gravityCacheXIndex];
+			coords[yIndex] = cachedGravity[gravityCacheYIndex];
+			return;
+		}
+		for (i = 0; i < gravityWells.length; i++) {
+			var wX = gravityWells[i][gravityWellXIndex];
+			var wY = gravityWells[i][gravityWellYIndex];
+			var strength = gravityWells[i][gravityWellStrengthIndex];
+			var pull = calcGravityPull(coords,wX,wY,strength);
+			moveTowards(coords,wX,wY,pull);
+		}
+		if (!(x < 0 || x > canvasWidth || y < 0 || y > canvasHeight)) {
+			pull = clockTickFraction*calcGravityPull(coords,x,y,gravityMultiplier);
+			moveTowards(coords,x,y,pull);
+		}
+		// Cache this gravity
+		cachedGravity[gravityCacheXIndex] = coords[xIndex]
+		cachedGravity[gravityCacheYIndex] = coords[yIndex];
+		cachedGravity[timeStampIndex] = timeSinceLastRefresh;
+	}
+	function calcGravityPull(coords,x,y,gravityStrength) {
+		var distance = distanceBetween(coords[xIndex],coords[yIndex],x,y);
+		if (distance == 0) {
+			return Number.MAX_VALUE;
+		}
+		return (gravityStrength*Math.pow(stableDistance,2))/Math.pow(distance,2);
+	}
+	function applyAntigravity(coords,x,y) {
+		if (x < 0 || x > canvasWidth || y < 0 || y > canvasHeight) {
+			return;
+		}
+		if (distanceBetween(coords[xIndex],coords[yIndex],x,y) > stableDistance) {
+			return;
+		}
+		var a = aMultiplier * stableDistance;
+		var b = (1+((bMultiplier-1)*(currentSpeed/maxSpeed))) * stableDistance;
+		var rotation = randomFloat(2*Math.PI);
+		var distance;
+		if (sKey) { // Square - beware the unexpected return
+			xPush = randomInt(stableDistance*2)-stableDistance;
+			yPush = randomInt(stableDistance*2)-stableDistance;
+			var push = randomFloat((stableDistance)/2) + stableDistance/2;
+			var xPoint = p1GravityX+xPush;
+			var yPoint = p1GravityY+yPush;
+			moveTowards(coords,xPoint,yPoint,push);
+			return; // beware!
+		}
+		else if (rotation > (Math.PI*1.5) || rotation < Math.PI*0.5 ) { // Circle
+			var xPush = stableDistance*Math.sin(rotation);
+			yPush = Math.sqrt(Math.pow(stableDistance,2)-Math.pow(xPush,2));
+			distance = Math.sqrt(xPush*xPush+yPush*yPush);
+		}
+		else if (rotation > Math.PI * 0.5 && rotation < Math.PI) { // Bottom Right Ellipse
+			var xPush = stableDistance*Math.sin(rotation);
+			var ellipsePart = (Math.pow(b,2)*Math.pow(xPush,2))/Math.pow(a,2);
+			yPush = Math.sqrt(Math.pow(b,2)-ellipsePart);
+			distance = Math.sqrt(xPush*xPush+yPush*yPush);
+			rotation = -Math.asin(yPush/distance)-(Math.PI/2);
+		}
+		else { // Bottom Left Ellipse
+			var xPush = stableDistance*Math.sin(rotation);
+			var ellipsePart = (Math.pow(b,2)*Math.pow(xPush,2))/Math.pow(a,2);
+			yPush = Math.sqrt(Math.pow(b,2)-ellipsePart);
+			var distance = Math.sqrt(xPush*xPush+yPush*yPush);
+			rotation = (Math.PI/2)+Math.asin(yPush/distance);
+		}
+		rotation = normaliseRotation(rotation+forwardPushRotation);
+		var push = randomFloat((distance)/2) + distance/2;
+		var xPoint = p1GravityX+distance*Math.sin(rotation);
+		var yPoint = p1GravityY+distance*Math.cos(rotation);
+		moveTowards(coords,xPoint,yPoint,push);
+	}
+	function moveTowards(coords,desiredX,desiredY,movement) {
+		var x = coords[xIndex];
+		var y = coords[yIndex];
+		if (x == desiredX && y == desiredY) {
+			//coords[xIndex] = x + randomInt(20)-10;
+			//coords[yIndex] = y + randomInt(20)-10;
+			return;
+		}
+		var distance = distanceBetween(x,y,desiredX,desiredY);
+		if (distance < movement) {
+			movement = distance;
+		}
+		if (x == desiredX) {
+			if (y > desiredY) {
+				// Head straight up (subtract from y)
+				coords[yIndex] = y-movement;
+				return;
+			}
+			else {
+				// Head straight down
+				coords[yIndex] = y+movement;
+				return;
+			}
+		}
+		if (y == desiredY) {
+			if (x > desiredX) {
+				// Head to the left (subtract from x)
+				coords[xIndex] = x-movement;
+				return;
+			}
+			else {
+				// Head to the right
+				coords[xIndex] = x+movement;
+				return;
+			}
+		}
+		var xDistance = x-desiredX;
+		var yDistance = y-desiredY;
+		var xMovement = xDistance/distance * movement;
+		var yMovement = yDistance/distance * movement;
+		coords[xIndex] = x-xMovement;
+		coords[yIndex] = y-yMovement;
+	}
+	function distanceBetween(x1,y1,x2,y2) {
+		xDiff = Math.abs(x1-x2);
+		yDiff = Math.abs(y1-y2);
+		return Math.sqrt((xDiff*xDiff + yDiff*yDiff));
+	}
+	function killParticles() {
+		var i;
+		// Red particles should be near the vessel
+		for (i = 0; i < p1Particles.length; i++) {
+			var coords = p1Particles[i];
+			if (coords[nextDeadIndex] == -1) { // Only kill particles who are not already dead
+				var distance = distanceBetween(coords[xIndex],coords[yIndex],p1GravityX,p1GravityY);
+				var overrun = distance - stableDistance;
+				var multipliedOverrun = Math.pow(overrun,3)/(overrun*40);
+				var gravityThreshold = Math.pow(stableDistance,3)/(stableDistance/10);
+				if (clockTickFraction*randomFloat(gravityThreshold) < multipliedOverrun) {
+					killParticle(p1Particles[i],i);
+				}
+			}
+		}
+	}
+	function killParticle(coords,particleIndex) {
+		if (p1DeadParticle == -1) {
+			coords[nextDeadIndex] = -2; // -2 does not point to any index but it isn't -1 (so it won't get painted)
+		}
+		else {
+			coords[nextDeadIndex] = p1DeadParticle;
+		}
+		p1DeadParticle = particleIndex;
+		p1DeadParticleCount++;
+	}
+	function captureKeyDown(e) {
+		var keyCode = e.keyCode;
+		if (keyCode == 87) {
+			wKey = true;
+		}
+		if (keyCode == 65) {
+			aKey = true;
+		}
+		if (keyCode == 83) {
+			sKey = true;
+		}
+		if (keyCode == 68) {
+			dKey = true;
+		}
+		if (keyCode == 16) {
+			shiftKey = true;
+		}
+	}
+	function captureKeyUp(e) {
+		var keyCode = e.keyCode;
+		if (keyCode == 87) {
+			wKey = false;
+		}
+		if (keyCode == 65) {
+			aKey = false;
+		}
+		if (keyCode == 83) {
+			sKey = false;
+		}
+		if (keyCode == 68) {
+			dKey = false;
+		}
+		if (keyCode == 16) {
+			shiftKey = false;
+		}
+	}
+	function draw() {
+		var workingContext = context;
+		workingContext.fillStyle = "rgba(0,0,0,0.7)";
+		workingContext.fillRect(0,0,canvasWidth,canvasHeight);
+		// The first player
+		workingContext.fillStyle = "rgba(255,100,0,0.05)";
+		for (i = 0; i < p1Particles.length; i++) {
+			var coords = p1Particles[i];
+			if (coords[nextDeadIndex] == -1) {
+				var x = p1Particles[i][xIndex];
+				var y = p1Particles[i][yIndex];
+				workingContext.beginPath();
+				workingContext.arc(x,y,3, 0, Math.PI*2, false);
+				workingContext.closePath();
+				workingContext.fill();
+				workingContext.arc();
+				//workingContext.fillRect (x, y, 1, 1);
+			}
+		}
+		workingContext.fillStyle = "rgba(255,100,255,0.5)";
+		for (i = 0; i < gravityWells.length; i++) {
+			var x = gravityWells[i][gravityWellXIndex];
+			var y = gravityWells[i][gravityWellYIndex];
+			workingContext.fillRect (x, y, 4, 4);
+		}
+		workingContext.fillStyle = "rgb(255,255,255,0.6)";
+		workingContext.fillRect (p1GravityX-1, p1GravityY-1, 3, 3);
+		workingContext.fillStyle = "rgb(255,255,255,0.6)";
+		workingContext.beginPath();
+		workingContext.arc(p1TravellingX+100*Math.sin(forwardIntention),p1TravellingY+100*Math.cos(forwardIntention), 8*(currentSpeed/maxSpeed), 0, Math.PI*2, false);
+		workingContext.closePath();
+		workingContext.fill();
+		workingContext.arc();
+		//workingContext.fillRect (p1GravityX+100*Math.sin(forwardIntention)-(currentSpeed/(2*3)), p1GravityY+100*Math.cos(forwardIntention)-(currentSpeed/(2*3)), 2*currentSpeed/3, 2*currentSpeed/3);
+		//workingContext.fillRect (p1GravityX+forwardPushX-1,p1GravityY+forwardPushY-1,5,5);
+		//workingContext.fillRect (p1GravityX+50*Math.sin(forwardPushRotation),p1GravityY+50*Math.cos(forwardPushRotation),5,5);
+		if (lastTimeLapse > maxFrameTime) {
+			maxFrameTime = lastTimeLapse;
+		}
+		document.getElementById("output").value = lastTimeLapse+", "+maxFrameTime+", "+p1DeadParticleCount+", "+stableDistance+", "+cacheHitCount+", "+clockTickFraction;
+	}
+	function randomInt(lim) {
+		return Math.floor(Math.random()*lim);
+	}
+	function randomFloat(lim) {
+		return Math.random()*lim;
+	}
+	function calcClockTickFraction() {
+		if (lastTimeLapse > clockTickTime*2) {
+			clockTickFraction = 2;
+		}
+		else {
+			clockTickFraction = (lastTimeLapse/clockTickTime);
+		}
+	}
+	</script>
+</head>
+<body onLoad="init()">
+<table border="2">
+	<tr>
+		<td>
+			<canvas id="canvas" width="1800" height="800" border="2"></canvas>
+		</td>
+	</tr>
+</table>
+<textarea id="output" cols="100" rows="6"></textarea>
+gravity<input id="gravity">
+Stable Distance<input id="stableDistance">
+Distance<input id="gravityDistance"><br>
+Pull<input id="gravityPull"><br><br>
+Distance<input id="antigravityDistance">input><br>
+Push<input id="antigravityPush"><br>
+</html>
+</body>
