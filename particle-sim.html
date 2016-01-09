@@ -600,7 +600,6 @@
 		if (lastTimeLapse > maxFrameTime) {
 			maxFrameTime = lastTimeLapse;
 		}
-		document.getElementById("output").value = lastTimeLapse+", "+maxFrameTime+", "+p1DeadParticleCount+", "+stableDistance+", "+cacheHitCount+", "+clockTickFraction;
 	}
 	function randomInt(lim) {
 		return Math.floor(Math.random()*lim);
@@ -626,12 +625,5 @@
 		</td>
 	</tr>
 </table>
-<textarea id="output" cols="100" rows="6"></textarea>
-gravity<input id="gravity">
-Stable Distance<input id="stableDistance">
-Distance<input id="gravityDistance"><br>
-Pull<input id="gravityPull"><br><br>
-Distance<input id="antigravityDistance">input><br>
-Push<input id="antigravityPush"><br>
 </html>
 </body>
