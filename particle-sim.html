@@ -576,7 +576,7 @@
 				workingContext.arc(x,y,3, 0, Math.PI*2, false);
 				workingContext.closePath();
 				workingContext.fill();
-				workingContext.arc();
+				workingContext.arc(x, y,50, 0, 2*Math.PI);
 				//workingContext.fillRect (x, y, 1, 1);
 			}
 		}
@@ -593,7 +593,7 @@
 		workingContext.arc(p1TravellingX+100*Math.sin(forwardIntention),p1TravellingY+100*Math.cos(forwardIntention), 8*(currentSpeed/maxSpeed), 0, Math.PI*2, false);
 		workingContext.closePath();
 		workingContext.fill();
-		workingContext.arc();
+		//workingContext.arc();
 		//workingContext.fillRect (p1GravityX+100*Math.sin(forwardIntention)-(currentSpeed/(2*3)), p1GravityY+100*Math.cos(forwardIntention)-(currentSpeed/(2*3)), 2*currentSpeed/3, 2*currentSpeed/3);
 		//workingContext.fillRect (p1GravityX+forwardPushX-1,p1GravityY+forwardPushY-1,5,5);
 		//workingContext.fillRect (p1GravityX+50*Math.sin(forwardPushRotation),p1GravityY+50*Math.cos(forwardPushRotation),5,5);
